@@ -156,6 +156,9 @@ juce::StringArray AudioDeviceHandler::buildChannelOptions(int numChannels) const
 {
     juce::StringArray options;
 
+    // First option: No Input
+    options.add("No Input");
+
     // Mono options
     for (int i = 0; i < numChannels; ++i)
     {

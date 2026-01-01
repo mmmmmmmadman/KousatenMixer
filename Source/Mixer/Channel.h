@@ -85,7 +85,7 @@ private:
 
     // Audio input settings
     juce::String inputDeviceName = "None";
-    int inputChannelStart = 0;
+    int inputChannelStart = -1;  // -1 = no input selected
     bool stereoMode = true;
 
     // Smoothed parameters to avoid clicks

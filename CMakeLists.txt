@@ -11,6 +11,8 @@ juce_add_gui_app(KousatenMixer
     PRODUCT_NAME "Kousaten Mixer"
     COMPANY_NAME "MADZINE"
     BUNDLE_ID "com.madzine.kousatenmixer"
+    MICROPHONE_PERMISSION_ENABLED TRUE
+    MICROPHONE_PERMISSION_TEXT "KOUSATEN Mixer needs microphone access for audio input."
 )
 
 juce_generate_juce_header(KousatenMixer)

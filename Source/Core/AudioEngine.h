@@ -60,9 +60,12 @@ public:
     // Solo handling
     void updateSoloState();
 
+    // Set input buffer for processing (called before getNextAudioBlock)
+    void setInputBuffer(const juce::AudioBuffer<float>* buffer) { inputBuffer = buffer; }
+
 private:
+    const juce::AudioBuffer<float>* inputBuffer = nullptr;
     std::vector<std::unique_ptr<Channel>> channels;
-    int nextChannelId = 0;
 
     MixBus delayBus { BusType::Delay };
     MixBus grainBus { BusType::Grain };
@@ -92,6 +95,11 @@ private:
     juce::AudioBuffer<float> delayReturnBuffer;
     juce::AudioBuffer<float> grainReturnBuffer;
     juce::AudioBuffer<float> reverbReturnBuffer;
+
+    // Per-channel send buffers (pre-allocated to avoid allocation in audio callback)
+    juce::AudioBuffer<float> channelDelaySendBuffer;
+    juce::AudioBuffer<float> channelGrainSendBuffer;
+    juce::AudioBuffer<float> channelReverbSendBuffer;
 
     juce::SmoothedValue<float> smoothedMasterVolume;
 

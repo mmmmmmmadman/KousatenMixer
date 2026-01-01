@@ -567,9 +567,19 @@ void ChannelStripComponent::comboBoxChanged(juce::ComboBox* comboBox)
     else if (comboBox == &inputChannelCombo)
     {
         juce::String text = comboBox->getText();
-        int channelStart = text.getIntValue() - 1;
-        channel->setInputChannelStart(std::max(0, channelStart));
-        channel->setStereo(text.contains("Stereo"));
+
+        // Check for "No Input" option
+        if (text == "No Input" || text.isEmpty())
+        {
+            channel->setInputChannelStart(-1);
+            channel->setStereo(true);
+        }
+        else
+        {
+            int channelStart = text.getIntValue() - 1;
+            channel->setInputChannelStart(channelStart);
+            channel->setStereo(text.contains("Stereo"));
+        }
     }
 }
 

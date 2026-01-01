@@ -43,6 +43,11 @@ void AudioEngine::prepareToPlay(int samplesPerBlockExpected, double sampleRate)
     delayReturnBuffer.setSize(2, samplesPerBlockExpected);
     grainReturnBuffer.setSize(2, samplesPerBlockExpected);
     reverbReturnBuffer.setSize(2, samplesPerBlockExpected);
+
+    // Per-channel send buffers (pre-allocated to avoid allocation in audio callback)
+    channelDelaySendBuffer.setSize(2, samplesPerBlockExpected);
+    channelGrainSendBuffer.setSize(2, samplesPerBlockExpected);
+    channelReverbSendBuffer.setSize(2, samplesPerBlockExpected);
 }
 
 void AudioEngine::releaseResources()
@@ -54,6 +59,9 @@ void AudioEngine::releaseResources()
     delayReturnBuffer.setSize(0, 0);
     grainReturnBuffer.setSize(0, 0);
     reverbReturnBuffer.setSize(0, 0);
+    channelDelaySendBuffer.setSize(0, 0);
+    channelGrainSendBuffer.setSize(0, 0);
+    channelReverbSendBuffer.setSize(0, 0);
 }
 
 void AudioEngine::getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferToFill)
@@ -81,8 +89,43 @@ void AudioEngine::getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferTo
         if (soloActive && !channel->isSoloed())
             continue;
 
-        // For now, generate silence as input (real implementation would get input from audio device)
+        // Copy input audio to temp buffer based on channel's input settings
+        int inputStart = channel->getInputChannelStart();
+        bool stereo = channel->isStereo();
+
         tempBuffer.clear();
+
+        // Only process if input is selected (inputStart >= 0)
+        if (inputStart >= 0 && inputBuffer != nullptr && inputBuffer->getNumChannels() > 0)
+        {
+            // Copy from input buffer to temp buffer
+            if (inputStart < inputBuffer->getNumChannels())
+            {
+                // Left channel (or mono)
+                for (int i = 0; i < numSamples; ++i)
+                {
+                    tempBuffer.getWritePointer(0)[i] = inputBuffer->getReadPointer(inputStart)[i];
+                }
+
+                // Right channel (if stereo and available)
+                if (stereo && inputStart + 1 < inputBuffer->getNumChannels())
+                {
+                    for (int i = 0; i < numSamples; ++i)
+                    {
+                        tempBuffer.getWritePointer(1)[i] = inputBuffer->getReadPointer(inputStart + 1)[i];
+                    }
+                }
+                else
+                {
+                    // Mono: copy left to right
+                    for (int i = 0; i < numSamples; ++i)
+                    {
+                        tempBuffer.getWritePointer(1)[i] = tempBuffer.getReadPointer(0)[i];
+                    }
+                }
+            }
+        }
+        // If inputStart < 0, tempBuffer remains silent (cleared above)
 
         // Process channel
         float* channelOutL = tempBuffer.getWritePointer(0);
@@ -94,16 +137,16 @@ void AudioEngine::getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferTo
         float* reverbSendL = reverbSendBuffer.getWritePointer(0);
         float* reverbSendR = reverbSendBuffer.getWritePointer(1);
 
-        // Temporary send buffers for this channel
-        juce::AudioBuffer<float> channelDelaySend(2, numSamples);
-        juce::AudioBuffer<float> channelGrainSend(2, numSamples);
-        juce::AudioBuffer<float> channelReverbSend(2, numSamples);
+        // Clear pre-allocated per-channel send buffers (no allocation!)
+        channelDelaySendBuffer.clear(0, numSamples);
+        channelGrainSendBuffer.clear(0, numSamples);
+        channelReverbSendBuffer.clear(0, numSamples);
 
         channel->process(tempBuffer.getReadPointer(0), tempBuffer.getReadPointer(1),
                         channelOutL, channelOutR,
-                        channelDelaySend.getWritePointer(0), channelDelaySend.getWritePointer(1),
-                        channelGrainSend.getWritePointer(0), channelGrainSend.getWritePointer(1),
-                        channelReverbSend.getWritePointer(0), channelReverbSend.getWritePointer(1),
+                        channelDelaySendBuffer.getWritePointer(0), channelDelaySendBuffer.getWritePointer(1),
+                        channelGrainSendBuffer.getWritePointer(0), channelGrainSendBuffer.getWritePointer(1),
+                        channelReverbSendBuffer.getWritePointer(0), channelReverbSendBuffer.getWritePointer(1),
                         numSamples);
 
         // Sum to output
@@ -113,15 +156,15 @@ void AudioEngine::getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferTo
             outputBuffer->getWritePointer(1)[startSample + i] += channelOutR[i];
         }
 
-        // Sum to send buffers
+        // Sum to send buffers (using pre-allocated buffers)
         for (int i = 0; i < numSamples; ++i)
         {
-            delaySendL[i] += channelDelaySend.getReadPointer(0)[i];
-            delaySendR[i] += channelDelaySend.getReadPointer(1)[i];
-            grainSendL[i] += channelGrainSend.getReadPointer(0)[i];
-            grainSendR[i] += channelGrainSend.getReadPointer(1)[i];
-            reverbSendL[i] += channelReverbSend.getReadPointer(0)[i];
-            reverbSendR[i] += channelReverbSend.getReadPointer(1)[i];
+            delaySendL[i] += channelDelaySendBuffer.getReadPointer(0)[i];
+            delaySendR[i] += channelDelaySendBuffer.getReadPointer(1)[i];
+            grainSendL[i] += channelGrainSendBuffer.getReadPointer(0)[i];
+            grainSendR[i] += channelGrainSendBuffer.getReadPointer(1)[i];
+            reverbSendL[i] += channelReverbSendBuffer.getReadPointer(0)[i];
+            reverbSendR[i] += channelReverbSendBuffer.getReadPointer(1)[i];
         }
 
         // Send to aux buses
@@ -191,7 +234,24 @@ int AudioEngine::addChannel()
     if (channels.size() >= MAX_CHANNELS)
         return -1;
 
-    int id = nextChannelId++;
+    // Find the lowest available ID (reuse IDs from removed channels)
+    int id = 0;
+    while (true)
+    {
+        bool idUsed = false;
+        for (const auto& ch : channels)
+        {
+            if (ch->getId() == id)
+            {
+                idUsed = true;
+                break;
+            }
+        }
+        if (!idUsed)
+            break;
+        id++;
+    }
+
     channels.push_back(std::make_unique<Channel>(id));
     return id;
 }

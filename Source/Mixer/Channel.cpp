@@ -77,7 +77,8 @@ void Channel::setInputDevice(const juce::String& deviceName)
 
 void Channel::setInputChannelStart(int channel)
 {
-    inputChannelStart = std::max(0, channel);
+    // Allow -1 for "no input selected"
+    inputChannelStart = std::max(-1, channel);
 }
 
 void Channel::setStereo(bool stereo)

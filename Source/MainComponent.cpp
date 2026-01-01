@@ -11,8 +11,15 @@ MainComponent::MainComponent()
     // Initialize device handler
     deviceHandler.initialize();
 
-    // Setup audio
-    setAudioChannels(0, 2);  // No input, stereo output
+    // Setup audio device manager - stereo input and output
+    auto result = audioDeviceManager.initialiseWithDefaultDevices(2, 2);
+    if (result.isNotEmpty())
+    {
+        DBG("Audio device error: " + result);
+    }
+
+    // Register as the single AudioIODeviceCallback
+    audioDeviceManager.addAudioCallback(this);
 
     // Add channel button
     addChannelButton.setColour(juce::TextButton::buttonColourId, accent);
@@ -52,7 +59,26 @@ MainComponent::MainComponent()
     masterDeviceCombo.setColour(juce::ComboBox::textColourId, textLight);
     masterDeviceCombo.setColour(juce::ComboBox::outlineColourId, juce::Colours::transparentBlack);
     masterDeviceCombo.onChange = [this] {
-        audioEngine.setMasterOutputDevice(masterDeviceCombo.getText());
+        juce::String selectedDevice = masterDeviceCombo.getText();
+        audioEngine.setMasterOutputDevice(selectedDevice);
+
+        // Try to change the audio output device
+        auto* currentDevice = audioDeviceManager.getCurrentAudioDevice();
+        if (currentDevice != nullptr && currentDevice->getName() != selectedDevice)
+        {
+            // Create new audio device setup with selected output
+            juce::AudioDeviceManager::AudioDeviceSetup setup;
+            audioDeviceManager.getAudioDeviceSetup(setup);
+            setup.outputDeviceName = selectedDevice;
+
+            // Apply the new setup
+            juce::String error = audioDeviceManager.setAudioDeviceSetup(setup, true);
+            if (error.isNotEmpty())
+            {
+                DBG("Error changing audio device: " + error);
+            }
+        }
+
         updateMasterChannelOptions();
     };
     addAndMakeVisible(masterDeviceCombo);
@@ -68,15 +94,34 @@ MainComponent::MainComponent()
     };
     addAndMakeVisible(masterChannelCombo);
 
-    // Populate master device list
+    // Populate master device list from audioDeviceManager
     {
-        auto devices = deviceHandler.getOutputDeviceNames();
-        int itemId = 1;
-        for (const auto& name : devices)
+        auto* currentDevice = audioDeviceManager.getCurrentAudioDevice();
+        if (currentDevice != nullptr)
         {
-            masterDeviceCombo.addItem(name, itemId++);
+            // Show current device name (read-only for now since changing device is complex)
+            masterDeviceCombo.addItem(currentDevice->getName(), 1);
+            masterDeviceCombo.setSelectedId(1);
+
+            // Get available output devices for info
+            auto& deviceTypes = audioDeviceManager.getAvailableDeviceTypes();
+            for (auto* deviceType : deviceTypes)
+            {
+                auto deviceNames = deviceType->getDeviceNames(false);  // false = output devices
+                for (int i = 0; i < deviceNames.size(); ++i)
+                {
+                    if (deviceNames[i] != currentDevice->getName())
+                    {
+                        masterDeviceCombo.addItem(deviceNames[i], masterDeviceCombo.getNumItems() + 1);
+                    }
+                }
+            }
         }
-        masterDeviceCombo.setSelectedId(1);
+        else
+        {
+            masterDeviceCombo.addItem("No Device", 1);
+            masterDeviceCombo.setSelectedId(1);
+        }
         updateMasterChannelOptions();
     }
 
@@ -183,22 +228,98 @@ MainComponent::MainComponent()
 MainComponent::~MainComponent()
 {
     stopTimer();
-    shutdownAudio();
+    audioDeviceManager.removeAudioCallback(this);
+    audioDeviceManager.closeAudioDevice();
 }
 
-void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate)
+// AudioIODeviceCallback implementation - handles both input and output
+void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputChannelData,
+                                                      int numInputChannels,
+                                                      float* const* outputChannelData,
+                                                      int numOutputChannels,
+                                                      int numSamples,
+                                                      const juce::AudioIODeviceCallbackContext& context)
 {
-    audioEngine.prepareToPlay(samplesPerBlockExpected, sampleRate);
+    juce::ignoreUnused(context);
+
+    // Copy input to pre-allocated buffer (no allocation in callback!)
+    int inputChans = std::min(numInputChannels, inputBuffer.getNumChannels());
+    int samplesToProcess = std::min(numSamples, inputBuffer.getNumSamples());
+
+    for (int ch = 0; ch < inputChans; ++ch)
+    {
+        if (inputChannelData[ch] != nullptr)
+        {
+            juce::FloatVectorOperations::copy(inputBuffer.getWritePointer(ch),
+                                               inputChannelData[ch],
+                                               samplesToProcess);
+        }
+    }
+
+    // Debug: check input level
+    if (numInputChannels > 0 && inputChannelData[0] != nullptr)
+    {
+        float maxLevel = 0.0f;
+        for (int i = 0; i < samplesToProcess; ++i)
+        {
+            maxLevel = std::max(maxLevel, std::abs(inputChannelData[0][i]));
+        }
+        inputLevel = maxLevel;
+    }
+
+    // Clear output buffer
+    outputBuffer.clear(0, samplesToProcess);
+
+    // Set input buffer for engine and process
+    audioEngine.setInputBuffer(&inputBuffer);
+
+    // Create AudioSourceChannelInfo for the engine
+    juce::AudioSourceChannelInfo info(&outputBuffer, 0, samplesToProcess);
+    audioEngine.getNextAudioBlock(info);
+
+    // Copy output buffer to device output
+    int outputChans = std::min(numOutputChannels, outputBuffer.getNumChannels());
+    for (int ch = 0; ch < outputChans; ++ch)
+    {
+        if (outputChannelData[ch] != nullptr)
+        {
+            juce::FloatVectorOperations::copy(outputChannelData[ch],
+                                               outputBuffer.getReadPointer(ch),
+                                               samplesToProcess);
+        }
+    }
+
+    // Clear any extra output channels
+    for (int ch = outputChans; ch < numOutputChannels; ++ch)
+    {
+        if (outputChannelData[ch] != nullptr)
+        {
+            juce::FloatVectorOperations::clear(outputChannelData[ch], numSamples);
+        }
+    }
 }
 
-void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferToFill)
+void MainComponent::audioDeviceAboutToStart(juce::AudioIODevice* device)
 {
-    audioEngine.getNextAudioBlock(bufferToFill);
+    if (device != nullptr)
+    {
+        int numInputChannels = device->getActiveInputChannels().countNumberOfSetBits();
+        int numOutputChannels = device->getActiveOutputChannels().countNumberOfSetBits();
+        int blockSize = device->getCurrentBufferSizeSamples();
+        double sampleRate = device->getCurrentSampleRate();
+
+        inputBuffer.setSize(std::max(2, numInputChannels), blockSize);
+        outputBuffer.setSize(std::max(2, numOutputChannels), blockSize);
+
+        audioEngine.prepareToPlay(blockSize, sampleRate);
+    }
 }
 
-void MainComponent::releaseResources()
+void MainComponent::audioDeviceStopped()
 {
     audioEngine.releaseResources();
+    inputBuffer.setSize(0, 0);
+    outputBuffer.setSize(0, 0);
 }
 
 void MainComponent::paint(juce::Graphics& g)
@@ -208,7 +329,7 @@ void MainComponent::paint(juce::Graphics& g)
     // Title
     g.setColour(accent);
     g.setFont(28.0f);
-    g.drawText("Kousaten Mixer", 20, 12, 300, 36, juce::Justification::left);
+    g.drawText("KOUSATEN Mixer", 20, 12, 300, 36, juce::Justification::left);
 
     // Subtitle - pink color, 20pt
     g.setColour(accent);
@@ -220,6 +341,11 @@ void MainComponent::paint(juce::Graphics& g)
     g.setFont(14.0f);
     g.drawText("Channels: " + juce::String(audioEngine.getChannelCount()),
                280, 52, 120, 20, juce::Justification::left);
+
+    // Debug: Input level indicator
+    g.setColour(textDim);
+    g.drawText("Input: " + juce::String(inputLevel.load(), 3),
+               150, 52, 100, 20, juce::Justification::left);
 
     // Draw master section
     drawMasterSection(g);
@@ -236,97 +362,110 @@ void MainComponent::drawMasterSection(juce::Graphics& g)
     g.fillRoundedRectangle(static_cast<float>(margin), static_cast<float>(masterY),
                            static_cast<float>(getWidth() - margin * 2), static_cast<float>(masterHeight), 8.0f);
 
-    // Master label
+    // === LEFT COLUMN: Master label + Volume slider ===
+    // Master label at top
     g.setColour(accent);
     g.setFont(18.0f);
     g.drawText("Master", margin + 10, masterY + 12, 70, 22, juce::Justification::left);
 
-    // Master meters (horizontal layout)
+    // Volume value (next to slider)
+    g.setColour(accent);
+    g.setFont(18.0f);
+    g.drawText(juce::String(static_cast<int>(masterVolumeSlider.getValue())), margin + 190, masterY + 45, 40, 22, juce::Justification::left);
+
+    // === RIGHT COLUMN: Device, Channel, L meter, R meter ===
+    int rightColX = margin + 260;
+    int rowH = 26;
+    int row1Y = masterY + 10;
+    int row2Y = row1Y + rowH;
+    int row3Y = row2Y + rowH;
+    int row4Y = row3Y + rowH;
+
+    // Labels for meters
+    g.setColour(textDim);
+    g.setFont(14.0f);
+    g.drawText("L", rightColX - 18, row3Y, 16, 20, juce::Justification::right);
+    g.drawText("R", rightColX - 18, row4Y, 16, 20, juce::Justification::right);
+
+    // Master meters (horizontal, in right column - extend to near effects section)
     float levelL = audioEngine.getMasterLevelLeft();
     float levelR = audioEngine.getMasterLevelRight();
 
-    int meterX = margin + 85;
-    int meterY2 = masterY + 14;
-    int meterWidth = 60;
-    int meterHeight = 8;
+    int fxStartX = margin + 480;  // Where effects section starts
+    int meterWidth = fxStartX - rightColX - 20;  // Extend to near effects, with 20px gap
+    int meterHeight = 10;
 
     // Left meter
     g.setColour(backgroundLight);
-    g.fillRoundedRectangle(static_cast<float>(meterX), static_cast<float>(meterY2),
+    g.fillRoundedRectangle(static_cast<float>(rightColX), static_cast<float>(row3Y + 5),
                            static_cast<float>(meterWidth), static_cast<float>(meterHeight), 2.0f);
     int fillWidth = static_cast<int>(levelL * meterWidth);
     if (fillWidth > 0)
     {
         g.setColour(accent);
-        g.fillRoundedRectangle(static_cast<float>(meterX + 1), static_cast<float>(meterY2 + 1),
+        g.fillRoundedRectangle(static_cast<float>(rightColX + 1), static_cast<float>(row3Y + 6),
                                static_cast<float>(fillWidth - 2), static_cast<float>(meterHeight - 2), 1.0f);
     }
 
     // Right meter
-    meterY2 += 12;
     g.setColour(backgroundLight);
-    g.fillRoundedRectangle(static_cast<float>(meterX), static_cast<float>(meterY2),
+    g.fillRoundedRectangle(static_cast<float>(rightColX), static_cast<float>(row4Y + 5),
                            static_cast<float>(meterWidth), static_cast<float>(meterHeight), 2.0f);
     fillWidth = static_cast<int>(levelR * meterWidth);
     if (fillWidth > 0)
     {
         g.setColour(accent);
-        g.fillRoundedRectangle(static_cast<float>(meterX + 1), static_cast<float>(meterY2 + 1),
+        g.fillRoundedRectangle(static_cast<float>(rightColX + 1), static_cast<float>(row4Y + 6),
                                static_cast<float>(fillWidth - 2), static_cast<float>(meterHeight - 2), 1.0f);
     }
-
-    // Master volume value
-    g.setColour(accent);
-    g.setFont(18.0f);
-    g.drawText(juce::String(static_cast<int>(masterVolumeSlider.getValue())), margin + 155, masterY + 42, 35, 22, juce::Justification::left);
 
     // Effect parameter labels - 18pt minimum, text left + slider right same row
     // Row layout: 4 rows * 24px = 96px content, with 12px top padding = 108px used within 120px bar
     g.setFont(18.0f);
 
     int fxX = margin + 480;
-    int rowH = 24;
-    int row1Y = masterY + 12;  // 12px top padding
-    int row2Y = row1Y + rowH;
-    int row3Y = row2Y + rowH;
-    int row4Y = row3Y + rowH;
+    int fxRowH = 24;
+    int fxRow1Y = masterY + 12;  // 12px top padding
+    int fxRow2Y = fxRow1Y + fxRowH;
+    int fxRow3Y = fxRow2Y + fxRowH;
+    int fxRow4Y = fxRow3Y + fxRowH;
     int labelW = 75;
 
     // Delay section (Time L, Time R, Feedback)
     g.setColour(accent);
-    g.drawText("Delay", fxX, row1Y, 50, 22, juce::Justification::left);
+    g.drawText("Delay", fxX, fxRow1Y, 50, 22, juce::Justification::left);
     g.setColour(textDim);
-    g.drawText("Time L", fxX + 55, row1Y, labelW, 22, juce::Justification::left);
-    g.drawText("Time R", fxX + 55, row2Y, labelW, 22, juce::Justification::left);
-    g.drawText("Feedback", fxX + 55, row3Y, labelW, 22, juce::Justification::left);
+    g.drawText("Time L", fxX + 55, fxRow1Y, labelW, 22, juce::Justification::left);
+    g.drawText("Time R", fxX + 55, fxRow2Y, labelW, 22, juce::Justification::left);
+    g.drawText("Feedback", fxX + 55, fxRow3Y, labelW, 22, juce::Justification::left);
 
     // Grain section (Size, Density, Position)
     int grainX = fxX + 200;
     g.setColour(accent);
-    g.drawText("Grain", grainX, row1Y, 50, 22, juce::Justification::left);
+    g.drawText("Grain", grainX, fxRow1Y, 50, 22, juce::Justification::left);
     g.setColour(textDim);
-    g.drawText("Size", grainX + 55, row1Y, labelW, 22, juce::Justification::left);
-    g.drawText("Density", grainX + 55, row2Y, labelW, 22, juce::Justification::left);
-    g.drawText("Position", grainX + 55, row3Y, labelW, 22, juce::Justification::left);
+    g.drawText("Size", grainX + 55, fxRow1Y, labelW, 22, juce::Justification::left);
+    g.drawText("Density", grainX + 55, fxRow2Y, labelW, 22, juce::Justification::left);
+    g.drawText("Position", grainX + 55, fxRow3Y, labelW, 22, juce::Justification::left);
 
     // Reverb section (Room, Damping, Decay)
     int reverbX = fxX + 400;
     g.setColour(accent);
-    g.drawText("Reverb", reverbX, row1Y, 60, 22, juce::Justification::left);
+    g.drawText("Reverb", reverbX, fxRow1Y, 60, 22, juce::Justification::left);
     g.setColour(textDim);
-    g.drawText("Room", reverbX + 65, row1Y, labelW, 22, juce::Justification::left);
-    g.drawText("Damping", reverbX + 65, row2Y, labelW, 22, juce::Justification::left);
-    g.drawText("Decay", reverbX + 65, row3Y, labelW, 22, juce::Justification::left);
+    g.drawText("Room", reverbX + 65, fxRow1Y, labelW, 22, juce::Justification::left);
+    g.drawText("Damping", reverbX + 65, fxRow2Y, labelW, 22, juce::Justification::left);
+    g.drawText("Decay", reverbX + 65, fxRow3Y, labelW, 22, juce::Justification::left);
 
     // Chaos section (Enable, Amount, Rate, Shape)
     int chaosX = fxX + 620;
     g.setColour(juce::Colour(0xffff8888));
-    g.drawText("Chaos", chaosX, row1Y, 55, 22, juce::Justification::left);
+    g.drawText("Chaos", chaosX, fxRow1Y, 55, 22, juce::Justification::left);
     g.setColour(textDim);
-    g.drawText("Enable", chaosX + 60, row1Y, labelW, 22, juce::Justification::left);
-    g.drawText("Amount", chaosX + 60, row2Y, labelW, 22, juce::Justification::left);
-    g.drawText("Rate", chaosX + 60, row3Y, labelW, 22, juce::Justification::left);
-    g.drawText("Shape", chaosX + 60, row4Y, labelW, 22, juce::Justification::left);
+    g.drawText("Enable", chaosX + 60, fxRow1Y, labelW, 22, juce::Justification::left);
+    g.drawText("Amount", chaosX + 60, fxRow2Y, labelW, 22, juce::Justification::left);
+    g.drawText("Rate", chaosX + 60, fxRow3Y, labelW, 22, juce::Justification::left);
+    g.drawText("Shape", chaosX + 60, fxRow4Y, labelW, 22, juce::Justification::left);
 }
 
 void MainComponent::resized()
@@ -358,50 +497,57 @@ void MainComponent::resized()
     // Master section - horizontal bar at bottom
     int masterY = getHeight() - masterBarHeight - 10;
 
-    // Master device combo (stacked vertically) - adjusted for taller bar
-    masterDeviceCombo.setBounds(margin + 145, masterY + 38, 100, 20);
-    masterChannelCombo.setBounds(margin + 145, masterY + 62, 100, 20);
+    // === LEFT COLUMN: Volume slider below "Master" label ===
+    // Volume slider - horizontal, below Master label
+    masterVolumeSlider.setBounds(margin + 10, masterY + 42, 170, 8);
 
-    // Master volume slider - horizontal, centered vertically
-    masterVolumeSlider.setBounds(margin + 260, masterY + 50, 200, 8);
+    // === RIGHT COLUMN: Device, Channel, L meter, R meter ===
+    int rightColX = margin + 260;
+    int rowH = 26;
+    int row1Y = masterY + 10;
+    int row2Y = row1Y + rowH;
+
+    // Device and Channel combos in right column
+    masterDeviceCombo.setBounds(rightColX, row1Y, 100, 22);
+    masterChannelCombo.setBounds(rightColX, row2Y, 100, 22);
 
     // Effect parameter sliders - text left, slider right same row
     // Must match Y positions in drawMasterSection() for proper alignment
     int fxX = margin + 480;
-    int rowH = 24;
-    int row1Y = masterY + 12;  // Match drawMasterSection row1Y
-    int row2Y = row1Y + rowH;
-    int row3Y = row2Y + rowH;
-    int row4Y = row3Y + rowH;
+    int fxRowH = 24;
+    int fxRow1Y = masterY + 12;  // Match drawMasterSection row1Y
+    int fxRow2Y = fxRow1Y + fxRowH;
+    int fxRow3Y = fxRow2Y + fxRowH;
+    int fxRow4Y = fxRow3Y + fxRowH;
     int sliderW = 50;
     int sliderH = 8;
     int sliderOffsetY = 7;  // Vertically center 8px slider in 22px text row: (22-8)/2 = 7
 
     // Delay: Time L, Time R, Feedback - slider after label
-    delayTimeLSlider.setBounds(fxX + 130, row1Y + sliderOffsetY, sliderW, sliderH);
-    delayTimeRSlider.setBounds(fxX + 130, row2Y + sliderOffsetY, sliderW, sliderH);
-    delayFeedbackSlider.setBounds(fxX + 130, row3Y + sliderOffsetY, sliderW, sliderH);
+    delayTimeLSlider.setBounds(fxX + 130, fxRow1Y + sliderOffsetY, sliderW, sliderH);
+    delayTimeRSlider.setBounds(fxX + 130, fxRow2Y + sliderOffsetY, sliderW, sliderH);
+    delayFeedbackSlider.setBounds(fxX + 130, fxRow3Y + sliderOffsetY, sliderW, sliderH);
 
     // Grain: Size, Density, Position
     int grainX = fxX + 200;
-    grainSizeSlider.setBounds(grainX + 130, row1Y + sliderOffsetY, sliderW, sliderH);
-    grainDensitySlider.setBounds(grainX + 130, row2Y + sliderOffsetY, sliderW, sliderH);
-    grainPositionSlider.setBounds(grainX + 130, row3Y + sliderOffsetY, sliderW, sliderH);
+    grainSizeSlider.setBounds(grainX + 130, fxRow1Y + sliderOffsetY, sliderW, sliderH);
+    grainDensitySlider.setBounds(grainX + 130, fxRow2Y + sliderOffsetY, sliderW, sliderH);
+    grainPositionSlider.setBounds(grainX + 130, fxRow3Y + sliderOffsetY, sliderW, sliderH);
 
     // Reverb: Room, Damping, Decay
     int reverbX = fxX + 400;
-    reverbRoomSlider.setBounds(reverbX + 145, row1Y + sliderOffsetY, sliderW, sliderH);
-    reverbDampingSlider.setBounds(reverbX + 145, row2Y + sliderOffsetY, sliderW, sliderH);
-    reverbDecaySlider.setBounds(reverbX + 145, row3Y + sliderOffsetY, sliderW, sliderH);
+    reverbRoomSlider.setBounds(reverbX + 145, fxRow1Y + sliderOffsetY, sliderW, sliderH);
+    reverbDampingSlider.setBounds(reverbX + 145, fxRow2Y + sliderOffsetY, sliderW, sliderH);
+    reverbDecaySlider.setBounds(reverbX + 145, fxRow3Y + sliderOffsetY, sliderW, sliderH);
 
     // Chaos: Enable, Amount, Rate, Shape - checkbox size 24x24 for visibility
     int chaosX = fxX + 620;
     int checkboxSize = 24;
     int checkboxOffsetY = (22 - checkboxSize) / 2;  // Center in row (-1)
-    chaosEnableButton.setBounds(chaosX + 135, row1Y + checkboxOffsetY, checkboxSize, checkboxSize);
-    chaosAmountSlider.setBounds(chaosX + 135, row2Y + sliderOffsetY, sliderW, sliderH);
-    chaosRateSlider.setBounds(chaosX + 135, row3Y + sliderOffsetY, sliderW, sliderH);
-    chaosShapeButton.setBounds(chaosX + 135, row4Y + checkboxOffsetY, checkboxSize, checkboxSize);
+    chaosEnableButton.setBounds(chaosX + 135, fxRow1Y + checkboxOffsetY, checkboxSize, checkboxSize);
+    chaosAmountSlider.setBounds(chaosX + 135, fxRow2Y + sliderOffsetY, sliderW, sliderH);
+    chaosRateSlider.setBounds(chaosX + 135, fxRow3Y + sliderOffsetY, sliderW, sliderH);
+    chaosShapeButton.setBounds(chaosX + 135, fxRow4Y + checkboxOffsetY, checkboxSize, checkboxSize);
 
     updateLayout();
 }
@@ -485,20 +631,38 @@ void MainComponent::updateMasterChannelOptions()
 {
     masterChannelCombo.clear();
 
-    juce::String deviceName = masterDeviceCombo.getText();
-    if (deviceName == "None" || deviceName.isEmpty())
+    auto* device = audioDeviceManager.getCurrentAudioDevice();
+    if (device == nullptr)
     {
         masterChannelCombo.addItem("No Output", 1);
         masterChannelCombo.setSelectedId(1);
         return;
     }
 
-    auto options = deviceHandler.buildOutputChannelOptions(deviceName);
-    int itemId = 1;
-    for (const auto& option : options)
+    // Get active output channels
+    auto outputChannels = device->getActiveOutputChannels();
+    int numChannels = outputChannels.countNumberOfSetBits();
+
+    if (numChannels == 0)
     {
-        masterChannelCombo.addItem(option, itemId++);
+        masterChannelCombo.addItem("No Output", 1);
+        masterChannelCombo.setSelectedId(1);
+        return;
     }
+
+    // Build channel options (stereo pairs)
+    int itemId = 1;
+    for (int i = 0; i < numChannels - 1; i += 2)
+    {
+        masterChannelCombo.addItem(juce::String(i + 1) + "-" + juce::String(i + 2) + " (Stereo)", itemId++);
+    }
+
+    // Add mono options if odd number of channels
+    if (numChannels % 2 == 1)
+    {
+        masterChannelCombo.addItem(juce::String(numChannels) + " (Mono)", itemId++);
+    }
+
     if (masterChannelCombo.getNumItems() > 0)
         masterChannelCombo.setSelectedId(1);
 }

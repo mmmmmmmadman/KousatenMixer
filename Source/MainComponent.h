@@ -13,17 +13,23 @@
 #include <vector>
 #include <memory>
 
-class MainComponent : public juce::AudioAppComponent,
-                      public juce::Timer
+class MainComponent : public juce::Component,
+                      public juce::Timer,
+                      public juce::AudioIODeviceCallback
 {
 public:
     MainComponent();
     ~MainComponent() override;
 
-    // AudioAppComponent
-    void prepareToPlay(int samplesPerBlockExpected, double sampleRate) override;
-    void getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferToFill) override;
-    void releaseResources() override;
+    // AudioIODeviceCallback - single callback for both input and output
+    void audioDeviceIOCallbackWithContext(const float* const* inputChannelData,
+                                          int numInputChannels,
+                                          float* const* outputChannelData,
+                                          int numOutputChannels,
+                                          int numSamples,
+                                          const juce::AudioIODeviceCallbackContext& context) override;
+    void audioDeviceAboutToStart(juce::AudioIODevice* device) override;
+    void audioDeviceStopped() override;
 
     // Component
     void paint(juce::Graphics& g) override;
@@ -42,6 +48,7 @@ private:
     const juce::Colour textLight { 0xffffffff };
     const juce::Colour textDim { 0xffc8b8b8 };
 
+    juce::AudioDeviceManager audioDeviceManager;
     Kousaten::AudioEngine audioEngine;
     Kousaten::AudioDeviceHandler deviceHandler;
 
@@ -81,6 +88,11 @@ private:
     void drawMasterSection(juce::Graphics& g);
     void syncAllChannelAuxSends();
     void updateMasterChannelOptions();
+
+    // Audio buffers
+    juce::AudioBuffer<float> inputBuffer;
+    juce::AudioBuffer<float> outputBuffer;
+    std::atomic<float> inputLevel { 0.0f };  // Debug: input level
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };
