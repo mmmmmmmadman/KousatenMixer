@@ -177,7 +177,7 @@ MainComponent::MainComponent()
     startTimerHz(30);
 
     // Set size LAST so resized() can position all components
-    setSize(1600, 950);
+    setSize(1600, 970);  // Increased height to accommodate 120px master bar
 }
 
 MainComponent::~MainComponent()
@@ -228,7 +228,7 @@ void MainComponent::paint(juce::Graphics& g)
 void MainComponent::drawMasterSection(juce::Graphics& g)
 {
     int margin = 20;
-    int masterHeight = 100;
+    int masterHeight = 120;
     int masterY = getHeight() - masterHeight - 10;
 
     // Background - full width horizontal bar at bottom
@@ -239,14 +239,14 @@ void MainComponent::drawMasterSection(juce::Graphics& g)
     // Master label
     g.setColour(accent);
     g.setFont(18.0f);
-    g.drawText("Master", margin + 10, masterY + 8, 70, 22, juce::Justification::left);
+    g.drawText("Master", margin + 10, masterY + 12, 70, 22, juce::Justification::left);
 
     // Master meters (horizontal layout)
     float levelL = audioEngine.getMasterLevelLeft();
     float levelR = audioEngine.getMasterLevelRight();
 
     int meterX = margin + 85;
-    int meterY2 = masterY + 10;
+    int meterY2 = masterY + 14;
     int meterWidth = 60;
     int meterHeight = 8;
 
@@ -278,14 +278,15 @@ void MainComponent::drawMasterSection(juce::Graphics& g)
     // Master volume value
     g.setColour(accent);
     g.setFont(18.0f);
-    g.drawText(juce::String(static_cast<int>(masterVolumeSlider.getValue())), margin + 155, masterY + 35, 35, 22, juce::Justification::left);
+    g.drawText(juce::String(static_cast<int>(masterVolumeSlider.getValue())), margin + 155, masterY + 42, 35, 22, juce::Justification::left);
 
     // Effect parameter labels - 18pt minimum, text left + slider right same row
+    // Row layout: 4 rows * 24px = 96px content, with 12px top padding = 108px used within 120px bar
     g.setFont(18.0f);
 
     int fxX = margin + 480;
     int rowH = 24;
-    int row1Y = masterY + 8;
+    int row1Y = masterY + 12;  // 12px top padding
     int row2Y = row1Y + rowH;
     int row3Y = row2Y + rowH;
     int row4Y = row3Y + rowH;
@@ -333,7 +334,7 @@ void MainComponent::resized()
     int margin = 20;
     int topBarHeight = 80;
     int rightPanelWidth = 300;
-    int masterBarHeight = 100;
+    int masterBarHeight = 120;  // Increased to fit 4 rows properly
     int bottomMargin = masterBarHeight + 20;
 
     // Add channel button - positioned to the right of subtitle
@@ -357,46 +358,50 @@ void MainComponent::resized()
     // Master section - horizontal bar at bottom
     int masterY = getHeight() - masterBarHeight - 10;
 
-    // Master device combo (stacked vertically)
-    masterDeviceCombo.setBounds(margin + 145, masterY + 30, 100, 18);
-    masterChannelCombo.setBounds(margin + 145, masterY + 50, 100, 18);
+    // Master device combo (stacked vertically) - adjusted for taller bar
+    masterDeviceCombo.setBounds(margin + 145, masterY + 38, 100, 20);
+    masterChannelCombo.setBounds(margin + 145, masterY + 62, 100, 20);
 
-    // Master volume slider - horizontal
-    masterVolumeSlider.setBounds(margin + 260, masterY + 40, 240, 8);
+    // Master volume slider - horizontal, centered vertically
+    masterVolumeSlider.setBounds(margin + 260, masterY + 50, 200, 8);
 
     // Effect parameter sliders - text left, slider right same row
+    // Must match Y positions in drawMasterSection() for proper alignment
     int fxX = margin + 480;
     int rowH = 24;
-    int row1Y = masterY + 8 + 7;   // Center slider in row
+    int row1Y = masterY + 12;  // Match drawMasterSection row1Y
     int row2Y = row1Y + rowH;
     int row3Y = row2Y + rowH;
     int row4Y = row3Y + rowH;
     int sliderW = 50;
     int sliderH = 8;
+    int sliderOffsetY = 7;  // Vertically center 8px slider in 22px text row: (22-8)/2 = 7
 
     // Delay: Time L, Time R, Feedback - slider after label
-    delayTimeLSlider.setBounds(fxX + 130, row1Y, sliderW, sliderH);
-    delayTimeRSlider.setBounds(fxX + 130, row2Y, sliderW, sliderH);
-    delayFeedbackSlider.setBounds(fxX + 130, row3Y, sliderW, sliderH);
+    delayTimeLSlider.setBounds(fxX + 130, row1Y + sliderOffsetY, sliderW, sliderH);
+    delayTimeRSlider.setBounds(fxX + 130, row2Y + sliderOffsetY, sliderW, sliderH);
+    delayFeedbackSlider.setBounds(fxX + 130, row3Y + sliderOffsetY, sliderW, sliderH);
 
     // Grain: Size, Density, Position
     int grainX = fxX + 200;
-    grainSizeSlider.setBounds(grainX + 130, row1Y, sliderW, sliderH);
-    grainDensitySlider.setBounds(grainX + 130, row2Y, sliderW, sliderH);
-    grainPositionSlider.setBounds(grainX + 130, row3Y, sliderW, sliderH);
+    grainSizeSlider.setBounds(grainX + 130, row1Y + sliderOffsetY, sliderW, sliderH);
+    grainDensitySlider.setBounds(grainX + 130, row2Y + sliderOffsetY, sliderW, sliderH);
+    grainPositionSlider.setBounds(grainX + 130, row3Y + sliderOffsetY, sliderW, sliderH);
 
     // Reverb: Room, Damping, Decay
     int reverbX = fxX + 400;
-    reverbRoomSlider.setBounds(reverbX + 145, row1Y, sliderW, sliderH);
-    reverbDampingSlider.setBounds(reverbX + 145, row2Y, sliderW, sliderH);
-    reverbDecaySlider.setBounds(reverbX + 145, row3Y, sliderW, sliderH);
+    reverbRoomSlider.setBounds(reverbX + 145, row1Y + sliderOffsetY, sliderW, sliderH);
+    reverbDampingSlider.setBounds(reverbX + 145, row2Y + sliderOffsetY, sliderW, sliderH);
+    reverbDecaySlider.setBounds(reverbX + 145, row3Y + sliderOffsetY, sliderW, sliderH);
 
-    // Chaos: Enable, Amount, Rate, Shape
+    // Chaos: Enable, Amount, Rate, Shape - checkbox size 24x24 for visibility
     int chaosX = fxX + 620;
-    chaosEnableButton.setBounds(chaosX + 135, row1Y - 3, 18, 18);
-    chaosAmountSlider.setBounds(chaosX + 135, row2Y, sliderW, sliderH);
-    chaosRateSlider.setBounds(chaosX + 135, row3Y, sliderW, sliderH);
-    chaosShapeButton.setBounds(chaosX + 135, row4Y - 3, 18, 18);
+    int checkboxSize = 24;
+    int checkboxOffsetY = (22 - checkboxSize) / 2;  // Center in row (-1)
+    chaosEnableButton.setBounds(chaosX + 135, row1Y + checkboxOffsetY, checkboxSize, checkboxSize);
+    chaosAmountSlider.setBounds(chaosX + 135, row2Y + sliderOffsetY, sliderW, sliderH);
+    chaosRateSlider.setBounds(chaosX + 135, row3Y + sliderOffsetY, sliderW, sliderH);
+    chaosShapeButton.setBounds(chaosX + 135, row4Y + checkboxOffsetY, checkboxSize, checkboxSize);
 
     updateLayout();
 }
