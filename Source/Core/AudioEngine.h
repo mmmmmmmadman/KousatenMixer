@@ -9,6 +9,7 @@
 #include "../Mixer/Channel.h"
 #include "../Mixer/MixBus.h"
 #include "../Mixer/AuxBus.h"
+#include "RtAudioManager.h"
 #include <vector>
 #include <memory>
 
@@ -45,6 +46,9 @@ public:
     int getAuxBusCount() const { return static_cast<int>(auxBuses.size()); }
     const std::vector<std::unique_ptr<AuxBus>>& getAllAuxBuses() const { return auxBuses; }
 
+    // RtAudio manager for multi-device output
+    RtAudioManager* getRtAudioManager() { return &rtAudioManager; }
+
     // Master controls
     void setMasterVolume(float volume);
     float getMasterVolume() const { return masterVolume; }
@@ -66,6 +70,7 @@ public:
 private:
     const juce::AudioBuffer<float>* inputBuffer = nullptr;
     std::vector<std::unique_ptr<Channel>> channels;
+    juce::SpinLock channelLock;  // Protects channels vector access
 
     MixBus delayBus { BusType::Delay };
     MixBus grainBus { BusType::Grain };
@@ -74,6 +79,9 @@ private:
     // Dynamic aux buses
     std::vector<std::unique_ptr<AuxBus>> auxBuses;
     int nextAuxId = 0;
+
+    // RtAudio manager for multi-device output
+    RtAudioManager rtAudioManager;
 
     float masterVolume = 1.0f;
     float masterLevelLeft = 0.0f;
@@ -100,6 +108,9 @@ private:
     juce::AudioBuffer<float> channelDelaySendBuffer;
     juce::AudioBuffer<float> channelGrainSendBuffer;
     juce::AudioBuffer<float> channelReverbSendBuffer;
+
+    // Aux bus output buffer (pre-allocated)
+    juce::AudioBuffer<float> auxOutputBuffer;
 
     juce::SmoothedValue<float> smoothedMasterVolume;
 

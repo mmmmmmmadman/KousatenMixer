@@ -246,4 +246,12 @@ juce::StringArray AudioDeviceHandler::buildOutputChannelOptions(const juce::Stri
     return buildChannelOptions(numChannels);
 }
 
+juce::String AudioDeviceHandler::getCurrentOutputDeviceName() const
+{
+    auto* device = deviceManager.getCurrentAudioDevice();
+    if (device != nullptr)
+        return device->getName();
+    return {};
+}
+
 } // namespace Kousaten

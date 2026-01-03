@@ -10,6 +10,9 @@ namespace Kousaten {
 AudioEngine::AudioEngine()
 {
     smoothedMasterVolume.setCurrentAndTargetValue(masterVolume);
+
+    // Initialize RtAudio manager
+    rtAudioManager.initialize();
 }
 
 AudioEngine::~AudioEngine()
@@ -48,6 +51,9 @@ void AudioEngine::prepareToPlay(int samplesPerBlockExpected, double sampleRate)
     channelDelaySendBuffer.setSize(2, samplesPerBlockExpected);
     channelGrainSendBuffer.setSize(2, samplesPerBlockExpected);
     channelReverbSendBuffer.setSize(2, samplesPerBlockExpected);
+
+    // Aux bus output buffer (pre-allocated)
+    auxOutputBuffer.setSize(2, samplesPerBlockExpected);
 }
 
 void AudioEngine::releaseResources()
@@ -62,6 +68,7 @@ void AudioEngine::releaseResources()
     channelDelaySendBuffer.setSize(0, 0);
     channelGrainSendBuffer.setSize(0, 0);
     channelReverbSendBuffer.setSize(0, 0);
+    auxOutputBuffer.setSize(0, 0);
 }
 
 void AudioEngine::getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferToFill)
@@ -82,7 +89,8 @@ void AudioEngine::getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferTo
         auxBus->clearBuffer();
     }
 
-    // Process each channel
+    // Process each channel (lock to prevent modification during iteration)
+    const juce::SpinLock::ScopedLockType lock(channelLock);
     for (auto& channel : channels)
     {
         // Skip muted channels (unless solo is active and this channel is soloed)
@@ -167,13 +175,15 @@ void AudioEngine::getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferTo
             reverbSendR[i] += channelReverbSendBuffer.getReadPointer(1)[i];
         }
 
-        // Send to aux buses
+        // Send to aux buses (with panner modulation)
+        auto pannedLevels = channel->getPannedAuxSendLevels();
         for (auto& auxBus : auxBuses)
         {
-            float auxSendLevel = channel->getAuxSend(auxBus->getId());
-            if (auxSendLevel > 0.0f)
+            int auxId = auxBus->getId();
+            auto it = pannedLevels.find(auxId);
+            if (it != pannedLevels.end() && it->second > 0.0f)
             {
-                auxBus->addToBuffer(channelOutL, channelOutR, numSamples, auxSendLevel);
+                auxBus->addToBuffer(channelOutL, channelOutR, numSamples, it->second);
             }
         }
     }
@@ -227,10 +237,44 @@ void AudioEngine::getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferTo
 
     masterLevelLeft = maxLeft;
     masterLevelRight = maxRight;
+
+    // Process aux buses and route to their output channels
+    for (auto& auxBus : auxBuses)
+    {
+        int outCh = auxBus->getOutputChannelStart();
+        if (outCh < 0) continue;  // No output assigned
+
+        // Check if output channels are within buffer range
+        if (outCh >= outputBuffer->getNumChannels()) continue;
+
+        // Process aux bus to get output
+        auxOutputBuffer.clear(0, numSamples);
+        auxBus->process(auxOutputBuffer.getWritePointer(0),
+                        auxOutputBuffer.getWritePointer(1),
+                        numSamples);
+
+        // Route to output channels (for same-device output)
+        bool stereo = auxBus->isStereo();
+        for (int i = 0; i < numSamples; ++i)
+        {
+            // Add to output (mix with existing content)
+            outputBuffer->getWritePointer(outCh)[startSample + i] += auxOutputBuffer.getReadPointer(0)[i];
+
+            if (stereo && outCh + 1 < outputBuffer->getNumChannels())
+            {
+                outputBuffer->getWritePointer(outCh + 1)[startSample + i] += auxOutputBuffer.getReadPointer(1)[i];
+            }
+        }
+
+        // Send to RtAudio device (for multi-device output)
+        auxBus->sendToDevice(numSamples);
+    }
 }
 
 int AudioEngine::addChannel()
 {
+    const juce::SpinLock::ScopedLockType lock(channelLock);
+
     if (channels.size() >= MAX_CHANNELS)
         return -1;
 
@@ -258,18 +302,24 @@ int AudioEngine::addChannel()
 
 void AudioEngine::removeChannel(int channelId)
 {
-    channels.erase(
-        std::remove_if(channels.begin(), channels.end(),
-                       [channelId](const std::unique_ptr<Channel>& ch) {
-                           return ch->getId() == channelId;
-                       }),
-        channels.end());
+    {
+        const juce::SpinLock::ScopedLockType lock(channelLock);
 
+        channels.erase(
+            std::remove_if(channels.begin(), channels.end(),
+                           [channelId](const std::unique_ptr<Channel>& ch) {
+                               return ch->getId() == channelId;
+                           }),
+            channels.end());
+    }
+    // Call after releasing lock to avoid deadlock
     updateSoloState();
 }
 
 Channel* AudioEngine::getChannel(int channelId)
 {
+    const juce::SpinLock::ScopedLockType lock(channelLock);
+
     for (auto& channel : channels)
     {
         if (channel->getId() == channelId)
@@ -286,6 +336,8 @@ void AudioEngine::setMasterVolume(float volume)
 
 void AudioEngine::updateSoloState()
 {
+    const juce::SpinLock::ScopedLockType lock(channelLock);
+
     soloActive = false;
     for (const auto& channel : channels)
     {
@@ -301,6 +353,7 @@ int AudioEngine::addAuxBus()
 {
     int id = nextAuxId++;
     auto auxBus = std::make_unique<AuxBus>(id);
+    auxBus->setRtAudioManager(&rtAudioManager);
     auxBus->prepareToPlay(currentBlockSize, currentSampleRate);
     auxBuses.push_back(std::move(auxBus));
     return id;
@@ -308,10 +361,14 @@ int AudioEngine::addAuxBus()
 
 void AudioEngine::removeAuxBus(int auxId)
 {
-    // Remove aux send from all channels
-    for (auto& channel : channels)
     {
-        channel->removeAuxSend(auxId);
+        const juce::SpinLock::ScopedLockType lock(channelLock);
+
+        // Remove aux send from all channels
+        for (auto& channel : channels)
+        {
+            channel->removeAuxSend(auxId);
+        }
     }
 
     // Remove the aux bus

@@ -8,6 +8,7 @@
 #include <JuceHeader.h>
 #include "../Mixer/Channel.h"
 #include "../Core/AudioDeviceHandler.h"
+#include "SendPannerComponent.h"
 #include <map>
 
 namespace Kousaten {
@@ -152,7 +153,11 @@ private:
     // Add send button
     juce::TextButton addSendButton { "+ Add Send" };
 
+    // Send Panner
+    std::unique_ptr<SendPannerComponent> sendPannerComponent;
+
     void updateAuxLayout();
+    void updateSendPannerAuxPositions();
 
     // Pan
     juce::Slider panSlider;

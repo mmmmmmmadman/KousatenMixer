@@ -68,6 +68,37 @@ float Channel::getAuxSend(int auxId) const
 void Channel::removeAuxSend(int auxId)
 {
     auxSends.erase(auxId);
+    sendPanner.removeAuxPosition(auxId);
+}
+
+std::map<int, float> Channel::getPannedAuxSendLevels() const
+{
+    std::map<int, float> result;
+
+    if (!sendPanner.isEnabled())
+    {
+        // Return static aux send levels when panner is disabled
+        return auxSends;
+    }
+
+    // Get panner distribution weights
+    auto pannerLevels = sendPanner.calculateSendLevels();
+
+    // Combine static levels with panner modulation
+    for (const auto& [auxId, staticLevel] : auxSends)
+    {
+        float pannerWeight = 1.0f;
+        auto it = pannerLevels.find(auxId);
+        if (it != pannerLevels.end())
+        {
+            pannerWeight = it->second;
+        }
+
+        // Multiply static level by panner weight
+        result[auxId] = staticLevel * pannerWeight;
+    }
+
+    return result;
 }
 
 void Channel::setInputDevice(const juce::String& deviceName)
@@ -152,6 +183,9 @@ void Channel::process(const float* inputLeft, const float* inputRight,
     }
 
     outputLevel = maxOutput;
+
+    // Update send panner automation (for non-XYPad modes)
+    sendPanner.process(numSamples, 48000.0);  // TODO: pass actual sample rate
 }
 
 } // namespace Kousaten

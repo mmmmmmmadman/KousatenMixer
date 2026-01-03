@@ -55,6 +55,9 @@ public:
     // Get the main device manager (for single-device mode fallback)
     juce::AudioDeviceManager& getDeviceManager() { return deviceManager; }
 
+    // Get current device names
+    juce::String getCurrentOutputDeviceName() const;
+
     // Rescan devices
     void rescanDevices();
 

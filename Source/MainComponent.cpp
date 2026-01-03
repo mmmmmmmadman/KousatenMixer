@@ -11,8 +11,8 @@ MainComponent::MainComponent()
     // Initialize device handler
     deviceHandler.initialize();
 
-    // Setup audio device manager - stereo input and output
-    auto result = audioDeviceManager.initialiseWithDefaultDevices(2, 2);
+    // Setup audio device manager - request many channels to support multi-channel interfaces
+    auto result = audioDeviceManager.initialiseWithDefaultDevices(32, 32);
     if (result.isNotEmpty())
     {
         DBG("Audio device error: " + result);
@@ -246,6 +246,10 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
     int inputChans = std::min(numInputChannels, inputBuffer.getNumChannels());
     int samplesToProcess = std::min(numSamples, inputBuffer.getNumSamples());
 
+    // Clear all channels first
+    inputBuffer.clear(0, samplesToProcess);
+
+    // Copy all available input channels
     for (int ch = 0; ch < inputChans; ++ch)
     {
         if (inputChannelData[ch] != nullptr)
@@ -303,13 +307,15 @@ void MainComponent::audioDeviceAboutToStart(juce::AudioIODevice* device)
 {
     if (device != nullptr)
     {
-        int numInputChannels = device->getActiveInputChannels().countNumberOfSetBits();
-        int numOutputChannels = device->getActiveOutputChannels().countNumberOfSetBits();
+        // Get total available channels (not just active)
+        int numInputChannels = device->getInputChannelNames().size();
+        int numOutputChannels = device->getOutputChannelNames().size();
         int blockSize = device->getCurrentBufferSizeSamples();
         double sampleRate = device->getCurrentSampleRate();
 
-        inputBuffer.setSize(std::max(2, numInputChannels), blockSize);
-        outputBuffer.setSize(std::max(2, numOutputChannels), blockSize);
+        // Allocate enough channels for multi-channel interfaces
+        inputBuffer.setSize(std::max(16, numInputChannels), blockSize);
+        outputBuffer.setSize(std::max(16, numOutputChannels), blockSize);
 
         audioEngine.prepareToPlay(blockSize, sampleRate);
     }
@@ -602,7 +608,7 @@ void MainComponent::removeChannel(int channelId)
 
 void MainComponent::updateLayout()
 {
-    int stripWidth = 240;
+    int stripWidth = 250;  // Two-column layout: Device/Level | Panner + Aux
     int stripHeight = channelViewport.getHeight() - 10;
     int spacing = 6;
 

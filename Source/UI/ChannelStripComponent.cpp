@@ -11,7 +11,7 @@ namespace Kousaten {
 ChannelStripComponent::ChannelStripComponent(Channel* ch, AudioDeviceHandler* handler, AudioEngine* engine)
     : channel(ch), deviceHandler(handler), audioEngine(engine)
 {
-    setSize(240, 700);
+    setSize(250, 700);  // Two-column layout: Left (Device/Level) | Right (Panner + Aux)
 
     // Name editor
     nameEditor.setText(channel->getName());
@@ -95,6 +95,11 @@ ChannelStripComponent::ChannelStripComponent(Channel* ch, AudioDeviceHandler* ha
     // Sync aux sends from engine
     if (audioEngine)
         syncAuxSends();
+
+    // Create Send Panner component
+    sendPannerComponent = std::make_unique<SendPannerComponent>(channel->getSendPanner());
+    addAndMakeVisible(*sendPannerComponent);
+    updateSendPannerAuxPositions();
 
     startTimerHz(30);
 }
@@ -279,6 +284,9 @@ void ChannelStripComponent::syncAuxSends()
             addAuxSend(bus->getId(), bus->getName());
         }
     }
+
+    // Update Send Panner with aux positions
+    updateSendPannerAuxPositions();
 }
 
 void ChannelStripComponent::paint(juce::Graphics& g)
@@ -286,14 +294,14 @@ void ChannelStripComponent::paint(juce::Graphics& g)
     g.setColour(backgroundMid);
     g.fillRoundedRectangle(getLocalBounds().toFloat(), 8.0f);
 
-    int rightWidth = 100;
-    int leftWidth = getWidth() - rightWidth - 2;  // 2px away from divider
-    int rightX = leftWidth + 2;
-    int margin = 10;
+    // Two-column layout: Left (Device/Level) | Right (Panner + Aux)
+    int leftWidth = 100;
+    int rightX = leftWidth + 4;
+    int margin = 8;
     int labelHeight = 18;
-    int rowHeight = 34;  // increased for better spacing
+    int rowHeight = 34;
 
-    // === LEFT SIDE ===
+    // === LEFT SIDE (Device/Level) ===
     int y = 8;
 
     // INPUT label
@@ -350,27 +358,20 @@ void ChannelStripComponent::paint(juce::Graphics& g)
     if (meterHeight > 30)
         drawMeter(g, margin, meterY, 14, meterHeight, currentLevel);
 
-    // === RIGHT SIDE (Aux sends only) ===
+    // === RIGHT SIDE (Panner + Aux) ===
     // Vertical divider
     g.setColour(backgroundLight);
-    g.fillRect(rightX - 1, 8, 2, getHeight() - 16);
-
-    // AUX label
-    y = 10;
-    g.setColour(accentDim);
-    g.setFont(18.0f);
-    g.drawText("AUX", rightX + 8, y, 50, labelHeight, juce::Justification::left);
+    g.fillRect(rightX - 2, 8, 2, getHeight() - 16);
 }
 
 void ChannelStripComponent::paintOverChildren(juce::Graphics& g)
 {
-    int rightWidth = 100;
-    int leftWidth = getWidth() - rightWidth - 2;
-    int rightX = leftWidth + 2;
-    int auxStartY = 10 + 26;
+    // Use viewport's actual position for aux labels
+    int auxStartY = auxViewport.getY();
+    int auxX = auxViewport.getX();
 
-    // Draw aux names on left side of aux area
-    g.setFont(18.0f);
+    // Draw aux names on left side of each aux row
+    g.setFont(14.0f);
     int scrollY = auxViewport.getViewPositionY();
     int rowHeight = 24;
     int visibleStart = scrollY / rowHeight;
@@ -384,8 +385,9 @@ void ChannelStripComponent::paintOverChildren(juce::Graphics& g)
         if (drawY >= auxStartY - rowHeight && drawY < auxStartY + auxViewport.getHeight())
         {
             g.setColour(textDim);
-            // Show the full aux name (follows Aux Output title)
-            g.drawText(ctrl.name, rightX + 4, drawY, 45, 18, juce::Justification::left);
+            // Show name if available, otherwise show number
+            juce::String label = ctrl.name.isNotEmpty() ? ctrl.name : juce::String(ctrl.auxId + 1);
+            g.drawText(label, auxX, drawY, 60, 18, juce::Justification::left);
         }
     }
 }
@@ -413,72 +415,80 @@ void ChannelStripComponent::drawMeter(juce::Graphics& g, int x, int y, int width
 
 void ChannelStripComponent::resized()
 {
-    int rightWidth = 100;
-    int leftWidth = getWidth() - rightWidth - 2;
-    int rightX = leftWidth + 2;
-    int margin = 10;
+    // Two-column layout: Left (Device/Level) | Right (Panner + Aux)
+    int leftWidth = 100;
+    int rightX = leftWidth + 4;
+    int rightWidth = getWidth() - rightX - 4;
+    int margin = 8;
     int nameHeight = 30;
     int comboHeight = 24;
     int rowHeight = 34;
-    int sliderHeight = 8;  // Thin faders (half width)
+    int sliderHeight = 16;  // 2x height for thicker faders
 
-    // === LEFT SIDE ===
+    // === LEFT SIDE (Device/Level) ===
     int y = 8;
 
     // Name editor - spans full width at top
     nameEditor.setBounds(margin, y, getWidth() - margin * 2, nameHeight);
     y += nameHeight + 8;
 
-    // INPUT section (left side)
+    // INPUT section
     y += 18; // label space
     inputDeviceCombo.setBounds(margin, y, leftWidth - margin * 2, comboHeight);
     y += comboHeight + 4;
     inputChannelCombo.setBounds(margin, y, leftWidth - margin * 2, comboHeight);
     y += comboHeight + 12;
 
-    // SEND section (effects on left)
+    // SEND section (effects)
     y += 24; // label space
 
-    // Fixed effect sliders (left side)
-    delaySendSlider.setBounds(margin, y + 16, leftWidth - margin * 2, sliderHeight);
+    // Fixed effect sliders (18px below label = 16 + 2px gap)
+    delaySendSlider.setBounds(margin, y + 18, leftWidth - margin * 2, sliderHeight);
     y += rowHeight;
 
-    grainSendSlider.setBounds(margin, y + 16, leftWidth - margin * 2, sliderHeight);
+    grainSendSlider.setBounds(margin, y + 18, leftWidth - margin * 2, sliderHeight);
     y += rowHeight;
 
-    reverbSendSlider.setBounds(margin, y + 16, leftWidth - margin * 2, sliderHeight);
+    reverbSendSlider.setBounds(margin, y + 18, leftWidth - margin * 2, sliderHeight);
     y += rowHeight + 10;
 
-    // Pan slider (left side)
-    panSlider.setBounds(margin, y + 16, leftWidth - margin * 2, sliderHeight);
+    // Pan slider
+    panSlider.setBounds(margin, y + 18, leftWidth - margin * 2, sliderHeight);
     y += rowHeight;
 
-    // Volume fader (left side) - fills remaining space, thin width
+    // Volume fader - fills remaining space
     y += 14;
     int volumeFaderHeight = getHeight() - y - 75;
     if (volumeFaderHeight < 60) volumeFaderHeight = 60;
-    volumeSlider.setBounds(margin + 35, y + 14, 15, volumeFaderHeight);  // 15px width (half)
+    volumeSlider.setBounds(margin + 35, y + 14, 15, volumeFaderHeight);
 
-    // Mute / Solo buttons (left side)
+    // Mute / Solo buttons
     int buttonY = getHeight() - 68;
     int buttonWidth = (leftWidth - margin * 3) / 2;
     muteButton.setBounds(margin, buttonY, buttonWidth, 28);
     soloButton.setBounds(margin * 2 + buttonWidth, buttonY, buttonWidth, 28);
 
-    // Remove button (left side)
+    // Remove button
     removeButton.setBounds(margin, buttonY + 32, leftWidth - margin * 2, 26);
 
-    // === RIGHT SIDE (Aux sends only) ===
-    int auxStartY = 10 + 26; // after AUX label
-    int sliderX = rightX + 8;
-    int sliderW = rightWidth - 16;
+    // === RIGHT SIDE (Panner on top, Aux below) ===
+    int pannerHeight = 350;  // Increased for Speed/Smooth/Amount sliders
 
-    // Viewport for scrollable aux sends
-    int auxViewportHeight = getHeight() - auxStartY - 36; // leave space for add button
-    auxViewport.setBounds(sliderX - 4, auxStartY, sliderW + 8, auxViewportHeight);
+    // Send Panner at top of right column
+    if (sendPannerComponent)
+    {
+        sendPannerComponent->setBounds(rightX, 8, rightWidth, pannerHeight);
+    }
 
-    // Add send button at bottom (right side)
-    addSendButton.setBounds(sliderX, getHeight() - 32, sliderW, 26);
+    // Aux sends below panner
+    int auxStartY = pannerHeight + 16;
+    int auxViewportHeight = getHeight() - auxStartY - 40;
+    if (auxViewportHeight < 60) auxViewportHeight = 60;
+
+    auxViewport.setBounds(rightX + 4, auxStartY, rightWidth - 8, auxViewportHeight);
+
+    // Add send button at bottom of right column
+    addSendButton.setBounds(rightX + 4, getHeight() - 32, rightWidth - 8, 26);
 
     updateAuxLayout();
 }
@@ -549,6 +559,8 @@ void ChannelStripComponent::buttonClicked(juce::Button* button)
     else if (button == &soloButton)
     {
         channel->setSolo(soloButton.getToggleState());
+        if (audioEngine)
+            audioEngine->updateSoloState();
     }
     else if (button == &removeButton)
     {
@@ -591,6 +603,51 @@ void ChannelStripComponent::timerCallback()
         currentLevel = newLevel;
         repaint();
     }
+
+    // Sync aux send sliders with panner levels
+    auto* panner = channel->getSendPanner();
+    if (panner && panner->isEnabled())
+    {
+        auto pannerLevels = panner->calculateSendLevels();
+        for (auto& ctrl : auxSendControls)
+        {
+            auto it = pannerLevels.find(ctrl.auxId);
+            if (it != pannerLevels.end())
+            {
+                // Scale panner level (0-1) to slider value (0-100)
+                double newValue = static_cast<double>(it->second) * 100.0;
+                if (std::abs(ctrl.slider->getValue() - newValue) > 0.5)
+                {
+                    ctrl.slider->setValue(newValue, juce::dontSendNotification);
+                }
+            }
+        }
+    }
+}
+
+void ChannelStripComponent::updateSendPannerAuxPositions()
+{
+    if (!sendPannerComponent || !channel) return;
+
+    auto* panner = channel->getSendPanner();
+    if (!panner) return;
+
+    // Collect all aux IDs and names
+    std::vector<int> auxIds;
+    std::map<int, juce::String> auxNames;
+
+    for (const auto& ctrl : auxSendControls)
+    {
+        auxIds.push_back(ctrl.auxId);
+        auxNames[ctrl.auxId] = ctrl.name;
+    }
+
+    // Arrange aux positions in a circle
+    panner->arrangeAuxPositionsCircle(auxIds);
+
+    // Update UI with aux names
+    sendPannerComponent->updateAuxNames(auxNames);
+    sendPannerComponent->syncFromPanner();
 }
 
 } // namespace Kousaten

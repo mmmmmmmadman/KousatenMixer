@@ -9,6 +9,7 @@
 #include "../Mixer/AuxBus.h"
 #include "../Mixer/MixBus.h"
 #include "../Core/AudioDeviceHandler.h"
+#include "../Core/RtAudioManager.h"
 
 namespace Kousaten {
 
@@ -63,7 +64,7 @@ class AuxOutputComponent : public juce::Component,
                             public juce::Timer
 {
 public:
-    AuxOutputComponent(AuxBus* bus, AudioDeviceHandler* deviceHandler);
+    AuxOutputComponent(AuxBus* bus, AudioDeviceHandler* deviceHandler, RtAudioManager* rtManager);
     ~AuxOutputComponent() override;
 
     void paint(juce::Graphics& g) override;
@@ -90,15 +91,17 @@ private:
 
     AuxBus* auxBus;
     AudioDeviceHandler* deviceHandler;
+    RtAudioManager* rtAudioManager;
 
     juce::TextEditor nameEditor;
-    juce::ComboBox deviceCombo;
-    juce::ComboBox channelCombo;
+    juce::ComboBox deviceCombo;   // RtAudio device selection
+    juce::ComboBox channelCombo;  // Output channel selection
     juce::Slider levelSlider;
     juce::TextButton removeButton { "X" };
 
     float currentLevel = 0.0f;
 
+    void updateDeviceList();
     void updateChannelOptions();
     void drawMeter(juce::Graphics& g, int x, int y, int width, int height, float level);
 

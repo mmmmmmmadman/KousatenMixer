@@ -110,8 +110,8 @@ void SendReturnRowComponent::timerCallback()
 // AuxOutputComponent - Horizontal row layout with device selection
 // =============================================================================
 
-AuxOutputComponent::AuxOutputComponent(AuxBus* bus, AudioDeviceHandler* handler)
-    : auxBus(bus), deviceHandler(handler)
+AuxOutputComponent::AuxOutputComponent(AuxBus* bus, AudioDeviceHandler* handler, RtAudioManager* rtManager)
+    : auxBus(bus), deviceHandler(handler), rtAudioManager(rtManager)
 {
     setSize(400, 52);
 
@@ -129,7 +129,7 @@ AuxOutputComponent::AuxOutputComponent(AuxBus* bus, AudioDeviceHandler* handler)
     };
     addAndMakeVisible(nameEditor);
 
-    // Device ComboBox
+    // Device ComboBox (RtAudio devices)
     deviceCombo.setColour(juce::ComboBox::backgroundColourId, backgroundLight);
     deviceCombo.setColour(juce::ComboBox::textColourId, textLight);
     deviceCombo.setColour(juce::ComboBox::outlineColourId, juce::Colours::transparentBlack);
@@ -162,19 +162,9 @@ AuxOutputComponent::AuxOutputComponent(AuxBus* bus, AudioDeviceHandler* handler)
     removeButton.addListener(this);
     addAndMakeVisible(removeButton);
 
-    // Populate device list
-    if (deviceHandler)
-    {
-        deviceCombo.clear();
-        auto devices = deviceHandler->getOutputDeviceNames();
-        int itemId = 1;
-        for (const auto& name : devices)
-        {
-            deviceCombo.addItem(name, itemId++);
-        }
-        deviceCombo.setSelectedId(1);
-        updateChannelOptions();
-    }
+    // Populate device list from RtAudioManager
+    updateDeviceList();
+    updateChannelOptions();
 
     startTimerHz(30);
 }
@@ -229,13 +219,13 @@ void AuxOutputComponent::resized()
     int y2 = h - 14;  // Adjusted for thinner slider
 
     // Name editor - top left
-    nameEditor.setBounds(x, y1, 70, rowH);
+    nameEditor.setBounds(x, y1, 55, rowH);
 
-    // Device combo - top middle
-    deviceCombo.setBounds(x + 75, y1, 90, rowH);
+    // Device combo - after name
+    deviceCombo.setBounds(x + 60, y1, 100, rowH);
 
-    // Channel combo - top right area
-    channelCombo.setBounds(x + 170, y1, 70, rowH);
+    // Channel combo - after device
+    channelCombo.setBounds(x + 165, y1, 60, rowH);
 
     // Level slider - bottom, thin (8px height)
     levelSlider.setBounds(x, y2, getWidth() - x - 65, 8);
@@ -257,15 +247,34 @@ void AuxOutputComponent::comboBoxChanged(juce::ComboBox* comboBox)
 {
     if (comboBox == &deviceCombo)
     {
-        auxBus->setOutputDevice(comboBox->getText());
+        juce::String deviceName = comboBox->getText();
+        if (deviceName == "None" || deviceName.isEmpty())
+        {
+            auxBus->setOutputDevice("None");
+        }
+        else
+        {
+            auxBus->setOutputDevice(deviceName);
+        }
         updateChannelOptions();
     }
     else if (comboBox == &channelCombo)
     {
         juce::String text = comboBox->getText();
-        int channelStart = text.getIntValue() - 1;
-        auxBus->setOutputChannelStart(std::max(0, channelStart));
-        auxBus->setStereo(text.contains("Stereo"));
+        if (text == "--" || text.isEmpty())
+        {
+            auxBus->setOutputChannelStart(-1);
+        }
+        else
+        {
+            // Parse channel number (first number in the text)
+            int channelStart = text.getIntValue() - 1;
+            auxBus->setOutputChannelStart(channelStart);
+
+            // Check if stereo (S) or mono (M)
+            bool isStereo = text.contains("(S)");
+            auxBus->setStereo(isStereo);
+        }
     }
 }
 
@@ -288,11 +297,30 @@ void AuxOutputComponent::timerCallback()
     }
 }
 
+void AuxOutputComponent::updateDeviceList()
+{
+    deviceCombo.clear();
+
+    // First option: None
+    deviceCombo.addItem("None", 1);
+
+    if (rtAudioManager)
+    {
+        auto deviceNames = rtAudioManager->getOutputDeviceNames();
+        int itemId = 2;
+        for (const auto& name : deviceNames)
+        {
+            deviceCombo.addItem(name, itemId++);
+        }
+    }
+
+    // Default to "None"
+    deviceCombo.setSelectedId(1);
+}
+
 void AuxOutputComponent::updateChannelOptions()
 {
     channelCombo.clear();
-
-    if (!deviceHandler) return;
 
     juce::String deviceName = deviceCombo.getText();
     if (deviceName == "None" || deviceName.isEmpty())
@@ -302,14 +330,29 @@ void AuxOutputComponent::updateChannelOptions()
         return;
     }
 
-    auto options = deviceHandler->buildOutputChannelOptions(deviceName);
-    int itemId = 1;
-    for (const auto& option : options)
+    // Get channel count from RtAudioManager
+    if (rtAudioManager)
     {
-        channelCombo.addItem(option, itemId++);
+        auto deviceInfo = rtAudioManager->getDeviceInfo(deviceName);
+        int numChannels = static_cast<int>(deviceInfo.outputChannels);
+
+        int itemId = 1;
+
+        // Build stereo pair options first
+        for (int i = 0; i < numChannels - 1; i += 2)
+        {
+            channelCombo.addItem(juce::String(i + 1) + "-" + juce::String(i + 2) + " (S)", itemId++);
+        }
+
+        // Then add mono options for each channel
+        for (int i = 0; i < numChannels; ++i)
+        {
+            channelCombo.addItem(juce::String(i + 1) + " (M)", itemId++);
+        }
+
+        if (channelCombo.getNumItems() > 0)
+            channelCombo.setSelectedId(1);
     }
-    if (channelCombo.getNumItems() > 0)
-        channelCombo.setSelectedId(1);
 }
 
 // =============================================================================
@@ -399,7 +442,8 @@ void UnifiedOutputSectionComponent::addAuxOutput()
 
     if (auxBus)
     {
-        auto component = std::make_unique<AuxOutputComponent>(auxBus, deviceHandler);
+        auto component = std::make_unique<AuxOutputComponent>(auxBus, deviceHandler,
+                                                               audioEngine->getRtAudioManager());
         component->onRemoveAux = [this](int id) { removeAuxOutput(id); };
         component->onNameChanged = [this]() {
             if (onAuxNameChanged)

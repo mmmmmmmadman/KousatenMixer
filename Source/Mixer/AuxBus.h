@@ -9,6 +9,9 @@
 
 namespace Kousaten {
 
+// Forward declaration
+class RtAudioManager;
+
 class AuxBus
 {
 public:
@@ -18,6 +21,9 @@ public:
 
     const juce::String& getName() const { return name; }
     void setName(const juce::String& newName) { name = newName; }
+
+    // RtAudio manager for multi-device output
+    void setRtAudioManager(RtAudioManager* manager) { rtAudioManager = manager; }
 
     // Output routing
     void setOutputDevice(const juce::String& deviceName);
@@ -41,13 +47,20 @@ public:
     void addToBuffer(const float* leftChannel, const float* rightChannel, int numSamples, float sendLevel);
     void process(float* outputLeft, float* outputRight, int numSamples);
 
+    // Send processed audio to RtAudio device
+    void sendToDevice(int numSamples);
+
 private:
     int id;
     juce::String name;
 
+    // RtAudio manager
+    RtAudioManager* rtAudioManager = nullptr;
+    int rtStreamId = -1;  // -1 = no stream
+
     // Output routing
     juce::String outputDeviceName = "None";
-    int outputChannelStart = 0;
+    int outputChannelStart = -1;  // -1 = no output
     bool stereoMode = true;
 
     // Levels
@@ -56,8 +69,11 @@ private:
 
     // Audio buffer
     juce::AudioBuffer<float> buffer;
+    juce::AudioBuffer<float> processedBuffer;  // For sending to RtAudio
     int currentBlockSize = 512;
     double currentSampleRate = 44100.0;
+
+    void updateRtStream();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AuxBus)
 };

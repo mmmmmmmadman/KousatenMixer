@@ -23,6 +23,7 @@ target_sources(KousatenMixer
         Source/MainComponent.cpp
         Source/Core/AudioEngine.cpp
         Source/Core/AudioDeviceHandler.cpp
+        Source/Core/RtAudioManager.cpp
         Source/Effects/ChaosGenerator.cpp
         Source/Effects/DelayProcessor.cpp
         Source/Effects/GrainProcessor.cpp
@@ -30,11 +31,17 @@ target_sources(KousatenMixer
         Source/Mixer/Channel.cpp
         Source/Mixer/MixBus.cpp
         Source/Mixer/AuxBus.cpp
+        Source/Mixer/SendPanner.cpp
         Source/Sampler/AudioLayer.cpp
         Source/UI/ChannelStripComponent.cpp
         Source/UI/SendBusComponent.cpp
         Source/UI/AuxOutputComponent.cpp
+        Source/UI/SendPannerComponent.cpp
+        ThirdParty/RtAudio.cpp
 )
+
+# RtAudio include path
+target_include_directories(KousatenMixer PRIVATE ThirdParty)
 
 target_compile_definitions(KousatenMixer
     PRIVATE
@@ -42,6 +49,8 @@ target_compile_definitions(KousatenMixer
         JUCE_USE_CURL=0
         JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:KousatenMixer,JUCE_PRODUCT_NAME>"
         JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:KousatenMixer,JUCE_VERSION>"
+        # RtAudio: use Core Audio on macOS
+        __MACOSX_CORE__
 )
 
 target_link_libraries(KousatenMixer
@@ -58,6 +67,9 @@ target_link_libraries(KousatenMixer
         juce::juce_graphics
         juce::juce_gui_basics
         juce::juce_gui_extra
+        # RtAudio dependencies for macOS
+        "-framework CoreAudio"
+        "-framework CoreFoundation"
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags

@@ -6,7 +6,9 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include "SendPanner.h"
 #include <map>
+#include <memory>
 
 namespace Kousaten {
 
@@ -38,6 +40,13 @@ public:
     float getAuxSend(int auxId) const;
     void removeAuxSend(int auxId);
     const std::map<int, float>& getAllAuxSends() const { return auxSends; }
+
+    // Send Panner for dynamic aux send distribution
+    SendPanner* getSendPanner() { return &sendPanner; }
+    const SendPanner* getSendPanner() const { return &sendPanner; }
+
+    // Get panned aux send levels (combines static levels with panner modulation)
+    std::map<int, float> getPannedAuxSendLevels() const;
 
     float getInputLevel() const { return inputLevel; }
     float getOutputLevel() const { return outputLevel; }
@@ -79,6 +88,9 @@ private:
 
     // Dynamic aux sends (auxId -> level)
     std::map<int, float> auxSends;
+
+    // Send Panner for dynamic distribution
+    SendPanner sendPanner;
 
     float inputLevel = 0.0f;
     float outputLevel = 0.0f;
