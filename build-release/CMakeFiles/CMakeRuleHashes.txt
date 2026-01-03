@@ -1,0 +1,3 @@
+# Hashes of file build rules.
+c4f5cde350f86034b290f236627df4b9 KousatenMixer_artefacts/JuceLibraryCode/JuceHeader.h
+72d766356ca88606c762d03916f357d8 KousatenMixer_artefacts/JuceLibraryCode/KousatenMixer/PkgInfo

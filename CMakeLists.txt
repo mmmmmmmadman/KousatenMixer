@@ -49,9 +49,26 @@ target_compile_definitions(KousatenMixer
         JUCE_USE_CURL=0
         JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:KousatenMixer,JUCE_PRODUCT_NAME>"
         JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:KousatenMixer,JUCE_VERSION>"
-        # RtAudio: use Core Audio on macOS
-        __MACOSX_CORE__
 )
+
+# Platform-specific RtAudio configuration
+if(APPLE)
+    target_compile_definitions(KousatenMixer PRIVATE __MACOSX_CORE__)
+    target_link_libraries(KousatenMixer PRIVATE
+        "-framework CoreAudio"
+        "-framework CoreFoundation"
+    )
+elseif(WIN32)
+    target_compile_definitions(KousatenMixer PRIVATE __WINDOWS_WASAPI__)
+    target_link_libraries(KousatenMixer PRIVATE
+        ole32
+        winmm
+        ksuser
+        mfplat
+        mfuuid
+        wmcodecdspuuid
+    )
+endif()
 
 target_link_libraries(KousatenMixer
     PRIVATE
@@ -67,9 +84,6 @@ target_link_libraries(KousatenMixer
         juce::juce_graphics
         juce::juce_gui_basics
         juce::juce_gui_extra
-        # RtAudio dependencies for macOS
-        "-framework CoreAudio"
-        "-framework CoreFoundation"
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags
