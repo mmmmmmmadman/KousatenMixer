@@ -193,16 +193,13 @@ MainComponent::MainComponent()
     chaosEnableButton.setColour(juce::ToggleButton::tickColourId, accent);
     chaosEnableButton.setColour(juce::ToggleButton::tickDisabledColourId, backgroundLight);
     chaosEnableButton.onStateChange = [this] {
-        bool enabled = chaosEnableButton.getToggleState();
-        audioEngine.getDelayBus()->setChaosEnabled(enabled);
-        audioEngine.getGrainBus()->setChaosEnabled(enabled);
-        audioEngine.getReverbBus()->setChaosEnabled(enabled);
+        updateChaosAmount();
     };
     addAndMakeVisible(chaosEnableButton);
 
     setupEffectSlider(chaosAmountSlider, 100.0);
     chaosAmountSlider.onValueChange = [this] {
-        // Chaos amount is handled internally
+        updateChaosAmount();
     };
 
     setupEffectSlider(chaosRateSlider, 10.0);
@@ -671,4 +668,14 @@ void MainComponent::updateMasterChannelOptions()
 
     if (masterChannelCombo.getNumItems() > 0)
         masterChannelCombo.setSelectedId(1);
+}
+
+void MainComponent::updateChaosAmount()
+{
+    float amount = chaosEnableButton.getToggleState()
+                       ? static_cast<float>(chaosAmountSlider.getValue() / 100.0)
+                       : 0.0f;
+    audioEngine.getDelayBus()->setChaosAmount(amount);
+    audioEngine.getGrainBus()->setChaosAmount(amount);
+    audioEngine.getReverbBus()->setChaosAmount(amount);
 }

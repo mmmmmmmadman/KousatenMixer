@@ -88,6 +88,7 @@ private:
     void drawMasterSection(juce::Graphics& g);
     void syncAllChannelAuxSends();
     void updateMasterChannelOptions();
+    void updateChaosAmount();
 
     // Audio buffers
     juce::AudioBuffer<float> inputBuffer;

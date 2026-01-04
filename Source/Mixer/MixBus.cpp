@@ -83,9 +83,9 @@ void MixBus::setReverbDecay(float decay)
     reverbDecay = juce::jlimit(0.0f, 1.0f, decay);
 }
 
-void MixBus::setChaosEnabled(bool enabled)
+void MixBus::setChaosAmount(float amount)
 {
-    chaosEnabled = enabled;
+    chaosAmount = juce::jlimit(0.0f, 1.0f, amount);
 }
 
 void MixBus::setChaosRate(float rate)
@@ -102,7 +102,7 @@ void MixBus::process(const float* inputLeft, const float* inputRight,
     for (int i = 0; i < numSamples; ++i)
     {
         float chaosOutput = 0.0f;
-        if (chaosEnabled)
+        if (chaosAmount > 0.0f)
         {
             chaosOutput = chaosGenerator.process(chaosRate);
         }
@@ -125,10 +125,10 @@ void MixBus::process(const float* inputLeft, const float* inputRight,
             case BusType::Grain:
             {
                 outLeft = grainProcessorLeft.process(left, grainSize, grainDensity,
-                                                     grainPosition, chaosEnabled,
+                                                     grainPosition, chaosAmount,
                                                      chaosOutput, static_cast<float>(sampleRate));
                 outRight = grainProcessorRight.process(right, grainSize, grainDensity,
-                                                       grainPosition, chaosEnabled,
+                                                       grainPosition, chaosAmount,
                                                        -chaosOutput, static_cast<float>(sampleRate));
                 break;
             }
@@ -137,11 +137,11 @@ void MixBus::process(const float* inputLeft, const float* inputRight,
             {
                 outLeft = reverbProcessorLeft.process(left, right, grainDensity,
                                                       reverbRoomSize, reverbDamping,
-                                                      reverbDecay, true, chaosEnabled,
+                                                      reverbDecay, true, chaosAmount,
                                                       chaosOutput, static_cast<float>(sampleRate));
                 outRight = reverbProcessorRight.process(left, right, grainDensity,
                                                         reverbRoomSize, reverbDamping,
-                                                        reverbDecay, false, chaosEnabled,
+                                                        reverbDecay, false, chaosAmount,
                                                         chaosOutput, static_cast<float>(sampleRate));
                 break;
             }

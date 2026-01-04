@@ -54,7 +54,7 @@ void SendPanner::setPosition(float x, float y)
 
 void SendPanner::setSpeed(float hz)
 {
-    speed = juce::jlimit(0.01f, 20.0f, hz);
+    speed = juce::jlimit(0.0005f, 20.0f, hz);  // Min: ~30 minutes per cycle
 }
 
 void SendPanner::setSmooth(float value)

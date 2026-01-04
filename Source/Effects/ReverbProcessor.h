@@ -60,16 +60,16 @@ public:
 
     float process(float inputL, float inputR, float grainDensity,
                   float roomSize, float damping, float decay,
-                  bool isLeftChannel, bool chaosEnabled, float chaosOutput,
+                  bool isLeftChannel, float chaosAmount, float chaosOutput,
                   float sampleRate)
     {
         float input = isLeftChannel ? inputL : inputR;
 
         // Calculate feedback based on decay
         float feedback = 0.5f + decay * 0.485f;
-        if (chaosEnabled)
+        if (chaosAmount > 0.0f)
         {
-            feedback += chaosOutput * 0.5f;
+            feedback += chaosOutput * chaosAmount * 0.5f;
             feedback = std::clamp(feedback, 0.0f, 0.995f);
         }
 

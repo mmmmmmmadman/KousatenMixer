@@ -41,7 +41,7 @@ public:
     }
 
     float process(float input, float grainSize, float density, float position,
-                  bool chaosEnabled, float chaosOutput, float sampleRate)
+                  float chaosAmount, float chaosOutput, float sampleRate)
     {
         // Write input to circular buffer
         grainBuffer[writeIndex] = input;
@@ -51,10 +51,13 @@ public:
         float grainSizeMs = grainSize * 99.0f + 1.0f;
         float grainSamples = (grainSizeMs / 1000.0f) * sampleRate;
 
+        // Scale chaos by amount
+        float scaledChaos = chaosOutput * chaosAmount;
+
         float densityValue = density;
-        if (chaosEnabled)
+        if (chaosAmount > 0.0f)
         {
-            densityValue += chaosOutput * 0.3f;
+            densityValue += scaledChaos * 0.3f;
         }
         densityValue = std::clamp(densityValue, 0.0f, 1.0f);
 
@@ -65,7 +68,7 @@ public:
         if (phase >= 1.0f)
         {
             phase -= 1.0f;
-            triggerNewGrain(grainSamples, position, chaosEnabled, chaosOutput, densityValue);
+            triggerNewGrain(grainSamples, position, chaosAmount, scaledChaos, densityValue);
         }
 
         // Process all active grains
@@ -127,7 +130,7 @@ private:
     };
 
     void triggerNewGrain(float grainSamples, float position,
-                         bool chaosEnabled, float chaosOutput, float densityValue)
+                         float chaosAmount, float scaledChaos, float densityValue)
     {
         for (auto& grain : grains)
         {
@@ -138,16 +141,17 @@ private:
                 grain.envelope = 0.0f;
 
                 float pos = position;
-                if (chaosEnabled)
+                if (chaosAmount > 0.0f)
                 {
-                    pos += chaosOutput * 20.0f;
+                    pos += scaledChaos * 20.0f;
 
-                    if (randomFloat() < 0.3f)
+                    // Probability scaled by chaosAmount
+                    if (randomFloat() < 0.3f * chaosAmount)
                         grain.direction = -1.0f;
                     else
                         grain.direction = 1.0f;
 
-                    if (densityValue > 0.7f && randomFloat() < 0.2f)
+                    if (densityValue > 0.7f && randomFloat() < 0.2f * chaosAmount)
                         grain.pitch = randomFloat() < 0.5f ? 0.5f : 2.0f;
                     else
                         grain.pitch = 1.0f;

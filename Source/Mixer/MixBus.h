@@ -50,7 +50,7 @@ public:
     void setReverbDamping(float damping);
     void setReverbDecay(float decay);
 
-    void setChaosEnabled(bool enabled);
+    void setChaosAmount(float amount);
     void setChaosRate(float rate);
 
     BusType getType() const { return type; }
@@ -83,7 +83,7 @@ private:
     float reverbDamping = 0.4f;
     float reverbDecay = 0.6f;
 
-    bool chaosEnabled = false;
+    float chaosAmount = 0.0f;
     float chaosRate = 0.01f;
 
     juce::SmoothedValue<float> smoothedReturnLevel;

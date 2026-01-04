@@ -58,9 +58,10 @@ SendPannerComponent::SendPannerComponent(SendPanner* panner)
     enableButton.addListener(this);
     addAndMakeVisible(enableButton);
 
-    // Speed slider
+    // Speed slider - range: 30 minutes (0.000556 Hz) to 10 Hz
     speedSlider.setSliderStyle(juce::Slider::LinearHorizontal);
-    speedSlider.setRange(0.1, 10.0, 0.1);
+    speedSlider.setRange(0.000556, 10.0, 0.0001);  // Min: 1/1800s = 30 minutes
+    speedSlider.setSkewFactorFromMidPoint(0.1);    // Logarithmic feel for better control
     speedSlider.setValue(1.0);
     speedSlider.setDoubleClickReturnValue(true, 1.0);
     speedSlider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
@@ -144,12 +145,27 @@ void SendPannerComponent::paint(juce::Graphics& g)
     int labelY = xyPadBounds.getBottom() + 56;
     int rowHeight = 32;
 
-    // Speed label
+    // Speed label - show Hz for fast, seconds/minutes for slow
     g.setColour(textDim);
     g.drawText("Speed", 4, labelY, 42, 14, juce::Justification::left);
     g.setColour(accent);
-    g.drawText(juce::String(speedSlider.getValue(), 1) + "Hz",
-               getWidth() - 42, labelY, 38, 14, juce::Justification::right);
+    double speedHz = speedSlider.getValue();
+    juce::String speedText;
+    if (speedHz >= 1.0)
+    {
+        speedText = juce::String(speedHz, 1) + "Hz";
+    }
+    else if (speedHz >= 0.0167)  // >= 1 cycle per minute
+    {
+        double seconds = 1.0 / speedHz;
+        speedText = juce::String(seconds, 1) + "s";
+    }
+    else
+    {
+        double minutes = 1.0 / (speedHz * 60.0);
+        speedText = juce::String(minutes, 1) + "m";
+    }
+    g.drawText(speedText, getWidth() - 48, labelY, 44, 14, juce::Justification::right);
     labelY += rowHeight;
 
     // Smooth label
