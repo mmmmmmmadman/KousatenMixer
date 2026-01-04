@@ -334,7 +334,14 @@ void RtAudioManager::destroyOutputStream(int streamId)
 void RtAudioManager::writeToStream(int streamId, const float* left,
                                    const float* right, int numSamples)
 {
-    std::lock_guard<std::mutex> lock(streamMutex);
+    // Lock-free check: only write if streams are active
+    if (!streamsActive.load(std::memory_order_acquire))
+        return;
+
+    // Fast path: try lock, if fails, skip this write (audio continues without glitch)
+    std::unique_lock<std::mutex> lock(streamMutex, std::try_to_lock);
+    if (!lock.owns_lock())
+        return;
 
     auto it = streams.find(streamId);
     if (it != streams.end())
@@ -352,11 +359,19 @@ void RtAudioManager::startAll()
         pair.second->start();
     }
 
+    streamsActive.store(true, std::memory_order_release);
     DBG("RtAudioManager: Started all streams");
 }
 
 void RtAudioManager::stopAll()
 {
+    // First, signal that streams are no longer active (lock-free)
+    streamsActive.store(false, std::memory_order_release);
+
+    // Small delay to let audio callbacks finish
+    juce::Thread::sleep(10);
+
+    // Now safe to acquire lock and stop streams
     std::lock_guard<std::mutex> lock(streamMutex);
 
     for (auto& pair : streams)
@@ -365,6 +380,24 @@ void RtAudioManager::stopAll()
     }
 
     DBG("RtAudioManager: Stopped all streams");
+}
+
+void RtAudioManager::switchDeviceAsync(std::function<void()> switchOperation)
+{
+    // Execute on message thread to avoid blocking UI
+    juce::MessageManager::callAsync([this, switchOperation]() {
+        // Stop streams first (non-blocking for audio thread)
+        stopAll();
+
+        // Additional delay for hardware to settle
+        juce::Thread::sleep(50);
+
+        // Perform the switch operation
+        switchOperation();
+
+        // Start streams again
+        startAll();
+    });
 }
 
 } // namespace Kousaten

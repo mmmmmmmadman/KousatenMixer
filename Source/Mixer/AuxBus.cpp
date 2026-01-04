@@ -122,35 +122,37 @@ void AuxBus::updateRtStream()
 {
     if (rtAudioManager == nullptr) return;
 
-    // Stop all streams first to prevent pop
-    rtAudioManager->stopAll();
+    // Capture current state for async operation
+    juce::String deviceName = outputDeviceName;
+    int channelStart = outputChannelStart;
+    bool stereo = stereoMode;
+    int busId = id;
 
-    // Destroy existing stream
-    if (rtStreamId >= 0)
-    {
-        rtAudioManager->destroyOutputStream(rtStreamId);
-        rtStreamId = -1;
-    }
-
-    // Create new stream if device is valid
-    if (outputDeviceName.isNotEmpty() && outputDeviceName != "None")
-    {
-        rtStreamId = rtAudioManager->createOutputStream(
-            outputDeviceName,
-            static_cast<unsigned int>(std::max(0, outputChannelStart)),
-            stereoMode ? 2 : 1
-        );
-
+    // Use async switching to prevent UI thread blocking
+    rtAudioManager->switchDeviceAsync([this, deviceName, channelStart, stereo, busId]() {
+        // Destroy existing stream
         if (rtStreamId >= 0)
         {
-            // Small delay to let hardware settle before starting
-            juce::Thread::sleep(50);
-
-            rtAudioManager->startAll();
-            DBG("AuxBus " + juce::String(id) + ": Created RtAudio stream " +
-                juce::String(rtStreamId) + " for device: " + outputDeviceName);
+            rtAudioManager->destroyOutputStream(rtStreamId);
+            rtStreamId = -1;
         }
-    }
+
+        // Create new stream if device is valid
+        if (deviceName.isNotEmpty() && deviceName != "None")
+        {
+            rtStreamId = rtAudioManager->createOutputStream(
+                deviceName,
+                static_cast<unsigned int>(std::max(0, channelStart)),
+                stereo ? 2 : 1
+            );
+
+            if (rtStreamId >= 0)
+            {
+                DBG("AuxBus " + juce::String(busId) + ": Created RtAudio stream " +
+                    juce::String(rtStreamId) + " for device: " + deviceName);
+            }
+        }
+    });
 }
 
 } // namespace Kousaten

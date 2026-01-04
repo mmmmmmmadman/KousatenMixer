@@ -13,6 +13,7 @@
 #include <vector>
 #include <atomic>
 #include <cstring>
+#include <functional>
 
 namespace Kousaten {
 
@@ -95,12 +96,15 @@ public:
                           unsigned int numChannels = 2);
     void destroyOutputStream(int streamId);
 
-    // Write to a stream
+    // Write to a stream (lock-free, safe from audio thread)
     void writeToStream(int streamId, const float* left, const float* right, int numSamples);
 
     // Start/stop all streams
     void startAll();
     void stopAll();
+
+    // Async device switching (call from message thread)
+    void switchDeviceAsync(std::function<void()> switchOperation);
 
     // Set global sample rate and buffer size
     void setSampleRate(unsigned int rate) { sampleRate = rate; }
@@ -118,6 +122,9 @@ private:
 
     mutable std::mutex deviceMutex;
     mutable std::mutex streamMutex;
+
+    // Atomic flag for safe stream access from audio thread
+    std::atomic<bool> streamsActive{false};
 
     void scanDevices();
 

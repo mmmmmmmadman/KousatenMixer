@@ -83,7 +83,7 @@ public:
 
 private:
     SendPannerMode mode = SendPannerMode::XYPad;
-    bool pannerEnabled = true;
+    bool pannerEnabled = false;  // Default off - uniform distribution
 
     // XY position
     float posX = 0.5f;
